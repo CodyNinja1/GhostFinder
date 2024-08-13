@@ -24,8 +24,6 @@ class Match
 
 UI::Font@ Monospace;
 
-
-
 array<string> Final = {};
 array<Match> Matches = {};
 
