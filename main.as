@@ -168,7 +168,7 @@ void RenderMatch(Match Match)
 
 void RenderMenu() 
 {
-    if (UI::MenuItem("\\$d3f" + Icons::Book + " \\$zGhostBinder", "", IsVisible)) {
+    if (UI::MenuItem("\\$d3f" + Icons::Book + " \\$zGhostFinder", "", IsVisible)) {
         IsVisible = !IsVisible;
     } 
 }
@@ -176,7 +176,7 @@ void RenderMenu()
 void Render()
 {
     if (!IsVisible) return;
-    if (UI::Begin("\\$d3f" + Icons::Book + " \\$zGhostBinder", IsVisible, UI::WindowFlags::NoCollapse))
+    if (UI::Begin("\\$d3f" + Icons::Book + " \\$zGhostFinder", IsVisible, UI::WindowFlags::NoCollapse))
     {
         UI::Text(!IsUIDExportFinished ? "Please wait..." : "Done!");
 
