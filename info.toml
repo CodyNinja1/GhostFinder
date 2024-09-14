@@ -1,4 +1,8 @@
 [meta]
-version = "v1.0"
+version = "v1.1"
 name = "GhostFinder"
 author = "JailMan"
+siteid = 603
+
+[script]
+exports = [ "Export.as" ]
