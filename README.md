@@ -3,7 +3,7 @@ Find and convert ghosts for when you need them.
 - Find ghosts by map number
 - Convert ghosts to replays (only for non-demo players).
 
-Ghost conversion tutorial:
+# Ghost conversion tutorial:
 1. Find the ghost you want to convert.
 2. Right-click on it.
 3. Go to the new window.
