@@ -1,3 +1,6 @@
+const uint OffsetReplayInfoChallengeId = 0x38;
+const uint OffsetGhostChallengeId = 0x120;
+
 CGameCtnChallenge@ MapToChallenge(const string &in map)
 {
     return cast<CGameCtnChallenge>(Fids::Preload(Fids::GetUser("Maps/" + MapToPath(map))));
@@ -111,38 +114,110 @@ string GetSoloKind(const string &in GhostKind)
 
 void RenderMatch(Match Match)
 {
-    UI::PushFont(Monospace);
     UI::Text(tostring(Match));
     if (UI::IsItemHovered())
     {
         UI::BeginTooltip();
         UI::Text("UID " + Match.MapUID + " matched with map #" + Match.MapNum + "'s UID\nThis ghost was driven in " + Match.GhostSolo);
+        UI::Text("Right-click to edit this ghost.");
         UI::EndTooltip();
     }
-    if (UI::IsItemClicked())
+    if (UI::IsItemClicked(UI::MouseButton::Right))
     {
-        OpenExplorerPath(Match.GhostFile.FullFileName.SubStr(0, Match.GhostFile.FullFileName.Length - Match.GhostFileName.Length));
-        // HandleConvertGhostToReplay(Match);
+        @CurrentActiveMatch = Match;
+        RenderMatchModifications = true;
+    }
+}
+
+void DownloadEmptyReplay()
+{
+    IsDownloadingEmptyReplay = true;
+
+    auto Request = Net::HttpGet("https://download.dashmap.live/59ccbd15-ef8d-4450-b781-72161ade02b1/EmptyReplay.Replay.Gbx");
+    Request.Start();
+
+    while (!Request.Finished()) yield();
+    
+    Request.SaveToFile(IO::FromUserGameFolder("Replays\\Replays\\EmptyReplay.Replay.Gbx"));
+
+    UI::ShowNotification(GhostFinderLogo + "GhostFinder", "Done downloading empty replay.", vec4(0, 0.7, 0, 1));
+
+    Fids::UpdateTree(Fids::GetUserFolder("Replays"));
+    IsEmptyReplayInstalled = Fids::GetUser("Replays/Replays/EmptyReplay.Replay.Gbx") !is null;
+
+    IsDownloadingEmptyReplay = false;
+}
+
+void RenderMatchMod() 
+{
+    UI::PushFont(Monospace);
+    UI::Text("Currently active ghost: " + tostring(CurrentActiveMatch));
+    UI::BeginDisabled(!IsEmptyReplayInstalled or IsConvertingReplay or IsDemo());
+    if (UI::Button("Convert ghost to replay") and !IsConvertingReplay and !IsDemo())
+    {
+        HandleConvertGhostToReplay(CurrentActiveMatch);
+    }
+    UI::EndDisabled();
+    if (IsConvertingReplay)
+    {
+        UI::Text("Please finish the conversion of the currently loaded replay.");
+    }
+    if (IsDemo())
+    {
+        UI::Text("Demo players are unable to convert ghosts to replays due to nadeo limitations.");
+    }
+
+    if (!IsEmptyReplayInstalled)
+    {
+        UI::Text("To convert this ghost to a replay, you must download/create an EmptyReplay.Replay.Gbx file.");
+        if (UI::Button("Check for EmptyReplay.Replay.Gbx in Replays/Replays/"))
+        {
+            Fids::UpdateTree(Fids::GetUserFolder("Replays"));
+            IsEmptyReplayInstalled = Fids::GetUser("Replays/Replays/EmptyReplay.Replay.Gbx") !is null;
+        }
+        if (UI::Button("Download EmptyReplay") and !IsDownloadingEmptyReplay)
+        {
+            startnew(DownloadEmptyReplay);
+        }
     }
     UI::PopFont();
 }
 
-void HandleConvertGhostToReplay(Match Match)
+void HandleConvertGhostToReplay(Match@ Match)
 {
+    IsConvertingReplay = true;
     auto EmptyReplay = LocateEmptyReplay();
+    auto MatchChallenge = MapToChallenge(NumToMap(Match.MapNum));
     if (EmptyReplay is null)
     {
-        UI::ShowNotification("To edit this ghost, you must have an empty replay in your Documents/Replays/Replays/ folder.");
+        UI::ShowNotification(GhostFinderLogo + "GhostFinder", "To edit this ghost, you must have an EmptyReplay.Replay.Gbx file (check capitalization!) in your Documents/Replays/Replays/ folder.");
         return;
     }
     else
     {
-        @EmptyReplay.Challenge = MapToChallenge(NumToMap(Match.MapNum));
-        // Dev::SetOffset(CMwNod(EmptyReplay.Ghosts[0]), 0, CMwNod(Match.Ghost));
-        // Dev::SetOffset(cast<CMwNod>(EmptyReplay.Ghosts[0]), Reflection::GetType("CMwNod").GetMember("Id").Offset, cast<CMwNod>(Match.Ghost).Id.Value);
-        ExploreNod(EmptyReplay);
-        ExploreNod(Match.Ghost);
+        @EmptyReplay.Challenge = MatchChallenge;
+        UI::ShowNotification(GhostFinderLogo + "GhostFinder", "Edit the empty replay and we will automatically import the ghost.", vec4(0, 0.7, 0, 1));
     }
+}
+
+CGameCtnMediaBlockGhost@ GetGhostFromEditor(CGameCtnMediaTracker@ Editor)
+{
+    for (uint i = 0; i < Editor.Tracks.Length; i++)
+    {
+        CGameCtnMediaTrack@ Track = Editor.Tracks[i];
+        if (Track.Blocks.Length == 1)
+        {
+            CGameCtnMediaBlock@ Block = Track.Blocks[0];
+            CGameCtnMediaBlockGhost@ GhostBlock = cast<CGameCtnMediaBlockGhost>(Block);
+            if (GhostBlock !is null) return GhostBlock;
+        }
+    }
+    return null;
+}
+
+bool IsDemo()
+{
+    return cast<CGameManiaPlanet>(GetApp()).ManiaPlanetScriptAPI.TmTurbo_IsDemo;
 }
 
 CGameCtnReplayRecord@ LocateEmptyReplay()
@@ -154,6 +229,21 @@ CGameCtnReplayRecord@ LocateEmptyReplay()
     return cast<CGameCtnReplayRecord>(Nod);
 }
 
+CGameCtnReplayRecordInfo@ LocateEmptyReplayInfo()
+{
+    auto App = GetApp();
+    auto ReplayInfos = App.ReplayRecordInfos;
+    for (uint i = 0; i < ReplayInfos.Length; i++)
+    {
+        auto ReplayInfo = ReplayInfos[i];
+        if (ReplayInfo.Name == "EmptyReplay")
+        {
+            return ReplayInfo;
+        }
+    }
+    return null;
+}
+
 void ForceLoadAllGhosts()
 {
     Fids::UpdateTree(MapsGhostsFolder);
@@ -161,10 +251,8 @@ void ForceLoadAllGhosts()
     {
         for (uint i = 0; i < 400; i++)
         {
-            print(i);
             auto Fid = Fids::GetUser(ProfileFolder.DirName + "/" + MapsGhostsFolder.DirName + "/" + i + ".Ghost.Gbx");
-            if (Fid is null) print(i + ".Ghost.Gbx is null.");
-            else print(i + ".Ghost.Gbx found.");
+            if (Fid !is null) print(i + ".Ghost.Gbx found.");
         }
     }
     Done = false;
@@ -207,5 +295,5 @@ string NumToMap(int num)
 
 string GetMapUIDFromGhost(CGameCtnGhost@ ghost)
 {
-    return MwId(Dev::GetOffsetUint32(ghost, 0x120)).GetName();
+    return MwId(Dev::GetOffsetUint32(ghost, OffsetGhostChallengeId)).GetName();
 }
