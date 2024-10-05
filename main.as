@@ -23,16 +23,27 @@ class Match
     }
 }
 
+const string GhostFinderLogo = "\\$d3f" + Icons::Book + " \\$z";
+
 UI::Font@ Monospace;
 
 array<string> Final = {};
 array<Match> Matches = {};
+
+bool IsDownloadingEmptyReplay = false;
+bool RenderMatchModifications = false;
+Match@ CurrentActiveMatch = null;
+
+bool IsConvertingReplay = false;
 
 [Setting hidden]
 bool IsVisible = true;
 
 [Setting min=10 max=200 name="Match limit for warning" category="Settings"]
 uint S_WarnFewGhosts = 200;
+
+[Setting hidden]
+bool IsEmptyReplayInstalled = false;
 
 bool MapsHaveLoaded = false;
 bool Done = false;
@@ -52,7 +63,7 @@ CSystemFidsFolder@ MapsGhostsFolder = null;
 
 void RenderMenu() 
 {
-    if (UI::MenuItem("\\$d3f" + Icons::Book + " \\$zGhostFinder", "", IsVisible)) {
+    if (UI::MenuItem(GhostFinderLogo + "GhostFinder", "", IsVisible)) {
         IsVisible = !IsVisible;
     } 
 }
@@ -60,6 +71,35 @@ void RenderMenu()
 void Render()
 {
     if (!IsVisible) return;
+    if (IsConvertingReplay)
+    {
+        auto App = cast<CGameCtnApp>(GetApp());
+        auto Editor = App.Editor;
+        if (Editor !is null)
+        {
+            auto ReplayEditor = cast<CGameCtnMediaTracker>(Editor);
+            if (ReplayEditor !is null)
+            {
+                auto Ghost = GetGhostFromEditor(ReplayEditor);
+                if (Ghost !is null)
+                {
+                    Dev::SetOffset(Ghost, 0x50, cast<CMwNod>(CurrentActiveMatch.Ghost));
+                    IsConvertingReplay = false;
+                }
+            }
+        }
+    }
+    if (RenderMatchModifications)
+    {
+        if (CurrentActiveMatch !is null)
+        {
+            if (UI::Begin(GhostFinderLogo + "Modify Ghost (GhostFinder)", RenderMatchModifications))
+            {
+                RenderMatchMod();
+                UI::End();
+            }
+        }
+    }
     if (UI::Begin("\\$d3f" + Icons::Book + " \\$zGhostFinder", IsVisible, UI::WindowFlags::NoCollapse))
     {
         UI::Text(!IsUIDExportFinished ? "Please wait..." : "Done!");
@@ -81,6 +121,7 @@ void Render()
         if (UI::Button("Reload"))
         {
             Done = false;
+            IsUIDExportFinished = false;
         }
         UI::SameLine();
         if (UI::Button("Force load all ghosts"))
@@ -94,6 +135,7 @@ void Render()
 
         if (!EnableFilter) UI::Separator();
 
+        UI::PushFont(Monospace);
         if (EnableFilter)
         {
             if (fmapnum > 200)
@@ -122,13 +164,16 @@ void Render()
                 RenderMatch(Match);
             }
         }
-        
+        UI::PopFont();
+
         UI::End();
     }
 }
 
 void Main()
 {
+    Fids::UpdateTree(Fids::GetUserFolder("Replays"));
+    IsEmptyReplayInstalled = Fids::GetUser("Replays/Replays/EmptyReplay.Replay.Gbx") !is null;
     @Monospace = @UI::LoadFont("DroidSansMono.ttf");
     while (true)
     {
@@ -162,14 +207,14 @@ void LoadMapsAndGhosts()
         auto MapNod = Fids::Preload(MapFid);
         if (MapNod is null)
         {
-            UI::ShowNotification("MapNod is null!");
+            warn("MapNod is null!");
             MapStr = NextMap(MapStr);
             continue;
         }
         auto Map = cast<CGameCtnChallenge>(MapNod);
         if (Map is null)
         {
-            UI::ShowNotification("Map is null!");
+            warn("Map is null!");
             MapStr = NextMap(MapStr);
             continue;
         }
