@@ -89,6 +89,7 @@ void Render()
             }
         }
     }
+    UI::PushFont(Monospace);
     if (RenderMatchModifications)
     {
         if (CurrentActiveMatch !is null)
@@ -135,7 +136,6 @@ void Render()
 
         if (!EnableFilter) UI::Separator();
 
-        UI::PushFont(Monospace);
         if (EnableFilter)
         {
             if (fmapnum > 200)
@@ -164,10 +164,9 @@ void Render()
                 RenderMatch(Match);
             }
         }
-        UI::PopFont();
-
         UI::End();
     }
+    UI::PopFont();
 }
 
 void Main()
