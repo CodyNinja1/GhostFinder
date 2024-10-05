@@ -1,4 +1,3 @@
-const uint OffsetReplayInfoChallengeId = 0x38;
 const uint OffsetGhostChallengeId = 0x120;
 
 CGameCtnChallenge@ MapToChallenge(const string &in map)
@@ -138,7 +137,16 @@ void DownloadEmptyReplay()
 
     while (!Request.Finished()) yield();
     
-    Request.SaveToFile(IO::FromUserGameFolder("Replays\\Replays\\EmptyReplay.Replay.Gbx"));
+
+    if (IO::FolderExists(IO::FromUserGameFolder("Replays\\Replays")))
+    {
+        Request.SaveToFile(IO::FromUserGameFolder("Replays\\Replays\\EmptyReplay.Replay.Gbx"));
+    }
+    else
+    {
+        IO::CreateFolder(IO::FromUserGameFolder("Replays\\Replays"), true);
+        Request.SaveToFile(IO::FromUserGameFolder("Replays\\Replays\\EmptyReplay.Replay.Gbx"));
+    }
 
     UI::ShowNotification(GhostFinderLogo + "GhostFinder", "Done downloading empty replay.", vec4(0, 0.7, 0, 1));
 
@@ -150,7 +158,6 @@ void DownloadEmptyReplay()
 
 void RenderMatchMod() 
 {
-    UI::PushFont(Monospace);
     UI::Text("Currently active ghost: " + tostring(CurrentActiveMatch));
     UI::BeginDisabled(!IsEmptyReplayInstalled or IsConvertingReplay or IsDemo());
     if (UI::Button("Convert ghost to replay") and !IsConvertingReplay and !IsDemo())
@@ -166,8 +173,12 @@ void RenderMatchMod()
     {
         UI::Text("Demo players are unable to convert ghosts to replays due to nadeo limitations.");
     }
+    if (IsDownloadingEmptyReplay)
+    {
+        UI::Text("Downloading EmptyReplay.Replay.Gbx...");
+    }
 
-    if (!IsEmptyReplayInstalled)
+    if (!IsEmptyReplayInstalled and !IsDemo())
     {
         UI::Text("To convert this ghost to a replay, you must download/create an EmptyReplay.Replay.Gbx file.");
         if (UI::Button("Check for EmptyReplay.Replay.Gbx in Replays/Replays/"))
@@ -180,7 +191,6 @@ void RenderMatchMod()
             startnew(DownloadEmptyReplay);
         }
     }
-    UI::PopFont();
 }
 
 void HandleConvertGhostToReplay(Match@ Match)
@@ -227,21 +237,6 @@ CGameCtnReplayRecord@ LocateEmptyReplay()
     auto Nod = Fids::Preload(File);
     if (Nod is null) return null;
     return cast<CGameCtnReplayRecord>(Nod);
-}
-
-CGameCtnReplayRecordInfo@ LocateEmptyReplayInfo()
-{
-    auto App = GetApp();
-    auto ReplayInfos = App.ReplayRecordInfos;
-    for (uint i = 0; i < ReplayInfos.Length; i++)
-    {
-        auto ReplayInfo = ReplayInfos[i];
-        if (ReplayInfo.Name == "EmptyReplay")
-        {
-            return ReplayInfo;
-        }
-    }
-    return null;
 }
 
 void ForceLoadAllGhosts()
