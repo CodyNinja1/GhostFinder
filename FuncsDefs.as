@@ -1,3 +1,4 @@
+const uint OffsetReplayInfoChallengeId = 0x38;
 const uint OffsetGhostChallengeId = 0x120;
 
 CGameCtnChallenge@ MapToChallenge(const string &in map)
@@ -118,13 +119,25 @@ void RenderMatch(Match Match)
     {
         UI::BeginTooltip();
         UI::Text("UID " + Match.MapUID + " matched with map #" + Match.MapNum + "'s UID\nThis ghost was driven in " + Match.GhostSolo);
-        UI::Text("Right-click to edit this ghost.");
+        if (!IsConvertingReplay) UI::Text("Right-click to edit this ghost.");
+        else UI::Text("Please finish converting the currently active replay.");
         UI::EndTooltip();
     }
-    if (UI::IsItemClicked(UI::MouseButton::Right))
+    if (UI::IsItemClicked(UI::MouseButton::Right) and GetApp().Editor is null)
     {
-        @CurrentActiveMatch = Match;
-        RenderMatchModifications = true;
+        if (!IsConvertingReplay)
+        {
+            @CurrentActiveMatch = Match;
+            RenderMatchModifications = true;
+            if (QuickConvert) 
+            {
+                IsConvertingReplay = true;
+                HandleConvertGhostToReplay(CurrentActiveMatch);
+            }
+        } else
+        {
+            UI::ShowNotification(GhostFinderLogo + "GhostFinder", "Please convert the currently active ghost or cancel the conversion!", vec4(0.6, 0, 0, 1));
+        }
     }
 }
 
@@ -160,6 +173,7 @@ void RenderMatchMod()
 {
     UI::Text("Currently active ghost: " + tostring(CurrentActiveMatch));
     UI::BeginDisabled(!IsEmptyReplayInstalled or IsConvertingReplay or IsDemo());
+
     if (UI::Button("Convert ghost to replay") and !IsConvertingReplay and !IsDemo())
     {
         HandleConvertGhostToReplay(CurrentActiveMatch);
@@ -168,6 +182,12 @@ void RenderMatchMod()
     if (IsConvertingReplay)
     {
         UI::Text("Please finish the conversion of the currently loaded replay.");
+        if (UI::ButtonColored("Cancel current conversion", 0))
+        {
+            @CurrentActiveMatch = null;
+            IsConvertingReplay = false;
+            UI::ShowNotification(GhostFinderLogo + "GhostFinder", "Conversion cancelled.", vec4(0.6, 0, 0, 1));
+        }
     }
     if (IsDemo())
     {
@@ -225,6 +245,21 @@ CGameCtnMediaBlockGhost@ GetGhostFromEditor(CGameCtnMediaTracker@ Editor)
     return null;
 }
 
+CGameCtnMediaBlockTime@ GetTimeFromEditor(CGameCtnMediaTracker@ Editor)
+{
+   for (uint i = 0; i < Editor.Tracks.Length; i++)
+    {
+        CGameCtnMediaTrack@ Track = Editor.Tracks[i];
+        if (Track.Blocks.Length == 1)
+        {
+            CGameCtnMediaBlock@ Block = Track.Blocks[0];
+            CGameCtnMediaBlockTime@ TimeBlock = cast<CGameCtnMediaBlockTime>(Block);
+            if (TimeBlock !is null) return TimeBlock;
+        }
+    }
+    return null; 
+}
+
 bool IsDemo()
 {
     return cast<CGameManiaPlanet>(GetApp()).ManiaPlanetScriptAPI.TmTurbo_IsDemo;
@@ -239,17 +274,24 @@ CGameCtnReplayRecord@ LocateEmptyReplay()
     return cast<CGameCtnReplayRecord>(Nod);
 }
 
+CGameCtnReplayRecordInfo@ LocateEmptyReplayInfo()
+{
+    auto App = GetApp();
+    auto ReplayInfos = App.ReplayRecordInfos;
+    for (uint i = 0; i < ReplayInfos.Length; i++)
+    {
+        auto ReplayInfo = ReplayInfos[i];
+        if (ReplayInfo.Name == "EmptyReplay")
+        {
+            return ReplayInfo;
+        }
+    }
+    return null;
+}
+
 void ForceLoadAllGhosts()
 {
     Fids::UpdateTree(MapsGhostsFolder);
-    if (MapsGhostsFolder !is null)
-    {
-        for (uint i = 0; i < 400; i++)
-        {
-            auto Fid = Fids::GetUser(ProfileFolder.DirName + "/" + MapsGhostsFolder.DirName + "/" + i + ".Ghost.Gbx");
-            if (Fid !is null) print(i + ".Ghost.Gbx found.");
-        }
-    }
     Done = false;
 }
 
@@ -291,4 +333,43 @@ string NumToMap(int num)
 string GetMapUIDFromGhost(CGameCtnGhost@ ghost)
 {
     return MwId(Dev::GetOffsetUint32(ghost, OffsetGhostChallengeId)).GetName();
+}
+
+void DownloadAllGhosts()
+{
+    if (!Done) return;
+    TotalDownloaded = 0;
+    IsDownloadingGhosts = true;
+    auto App = cast<CTrackMania>(GetApp());
+    auto Menu = cast<CTrackManiaMenus>(App.MenuManager);
+    auto ManiaApp = Menu.MenuCustom_CurrentManiaApp;
+    auto ScoreMgr = ManiaApp.ScoreMgr;
+    MwId UserId = App.ManiaPlanetScriptAPI.MasterServer_MSUsers[0].Id;
+
+    for (uint i = 0; i < Final.Length; i++)
+    {
+        if (IsDownloadingGhosts == false) 
+        {
+            UI::ShowNotification(GhostFinderLogo + "GhostFinder", "Ghost download has been cancelled.",  vec4(0.6, 0, 0, 1));
+            return;
+        }
+        if (ScoreMgr.ScoreStatus_GetLocalStatus(UserId) == CGameScoreAndLeaderBoardManagerScript::ELocalScoreStatus::Loading)
+        {
+            i--;
+            continue;
+        }
+        auto Task = ScoreMgr.Campaign_GetMapRecordGhost(UserId, Final[i]);
+        while (Task.IsProcessing) yield();
+        if (Task.ErrorType != CWebServicesTaskResult::ETaskErrorType::Success and Task.ErrorType != CWebServicesTaskResult::ETaskErrorType::DataManager) UI::ShowNotification(GhostFinderLogo + "GhostFinder", "Could not load ghost for map #" + (i + 1) + " (" + tostring(Task.ErrorType) + ")", vec4(0.6, 0, 0, 1));
+        // else UI::ShowNotification(GhostFinderLogo + "GhostFinder", "Downloaded replay for #" + (i + 1));
+        ScoreMgr.ReleaseTaskResult(Task.Id);
+        TotalDownloaded = i + 1;
+        yield(100); // required for turbo to not completely shit itself (thanks nado)
+    }
+
+    UI::ShowNotification(GhostFinderLogo + "GhostFinder", "Done trying to load ghosts.");
+    IsUIDExportFinished = false;
+    Done = false;
+    IsDownloadingGhosts = false;
+    TotalDownloaded = 0;
 }
