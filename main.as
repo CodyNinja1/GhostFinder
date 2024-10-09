@@ -36,14 +36,23 @@ Match@ CurrentActiveMatch = null;
 
 bool IsConvertingReplay = false;
 
+bool IsDownloadingGhosts = false;
+int TotalDownloaded = 0;
+
 [Setting hidden]
 bool IsVisible = true;
 
-[Setting min=10 max=200 name="Match limit for warning" category="Settings"]
-uint S_WarnFewGhosts = 200;
+// [Setting min=10 max=200 name="Match limit for warning" category="Settings"]
+// uint S_WarnFewGhosts = 200;
+
+[Setting min=1 max=100 name="Number of ghosts loaded per frame" category="Settings"]
+uint MatchPerFrame = 20; // 20 worked best during testing on lower-end devices
 
 [Setting hidden]
 bool IsEmptyReplayInstalled = false;
+
+[Setting name="Quick convert (quickly convert ghosts to replays)" category="Settings"]
+bool QuickConvert = true;
 
 bool MapsHaveLoaded = false;
 bool Done = false;
@@ -68,9 +77,8 @@ void RenderMenu()
     } 
 }
 
-void Render()
+void ConvertReplay()
 {
-    if (!IsVisible) return;
     if (IsConvertingReplay)
     {
         auto App = cast<CGameCtnApp>(GetApp());
@@ -80,17 +88,37 @@ void Render()
             auto ReplayEditor = cast<CGameCtnMediaTracker>(Editor);
             if (ReplayEditor !is null)
             {
-                auto Ghost = GetGhostFromEditor(ReplayEditor);
+                CGameCtnMediaBlockGhost@ Ghost = GetGhostFromEditor(ReplayEditor);
                 if (Ghost !is null)
                 {
-                    Dev::SetOffset(Ghost, 0x50, cast<CMwNod>(CurrentActiveMatch.Ghost));
-                    IsConvertingReplay = false;
+                    @Ghost.GhostModel = @CurrentActiveMatch.Ghost;
+
+                    // it took me 3 hours to debug why this wasn't working properly, i forgot the .0 at the end of 1000.0
+                    float Extension = (Ghost.GhostModel.RaceTime / 1000.0) + 0.5;
+
+                    IO::SetClipboard(tostring(Extension));
+                    UI::ShowNotification(GhostFinderLogo + "GhostFinder", "You can now paste the correct time value at the Time track's last key.");
+
+                    for (uint i = 0; i < ReplayEditor.Tracks.Length; i++)
+                    {
+                        auto Track = ReplayEditor.Tracks[i];
+                        if (Track.Blocks.Length == 0) continue; 
+                        Track.Blocks[Track.Blocks.Length - 1].End = Extension;
+                        yield();
+                    }
                 }
+
+                IsConvertingReplay = false;
             }
         }
     }
+}
+
+void Render()
+{
+    if (!IsVisible) return;
     UI::PushFont(Monospace);
-    if (RenderMatchModifications)
+    if (RenderMatchModifications and !QuickConvert)
     {
         if (CurrentActiveMatch !is null)
         {
@@ -104,7 +132,7 @@ void Render()
     if (UI::Begin("\\$d3f" + Icons::Book + " \\$zGhostFinder", IsVisible, UI::WindowFlags::NoCollapse))
     {
         UI::Text(!IsUIDExportFinished ? "Please wait..." : "Done!");
-
+        
         if (!IsUIDExportFinished) UI::Separator();
 
         if (IsUIDExportFinished)
@@ -112,13 +140,54 @@ void Render()
             UI::SameLine();
             UI::Text("Total " + Matches.Length + " Ghost" + (Matches.Length == 1 ? "" : "s") + " found.");
             UI::Separator();
-            if (Matches.Length < S_WarnFewGhosts)
-            {
-                UI::Text("Only a few matches were found.\nPlease wait for the game to load during bootup and reload\nif this behaviour is unexpected.\nYou can also force load all of the ghosts in your MapsGhosts folder.");
-                UI::Separator();
-            }
+            // removed for being too annoying :iidiot:
+            // if (Matches.Length < S_WarnFewGhosts)
+            // {
+            //     UI::Text("Only a few matches were found.\nPlease wait for the game to load during bootup and reload\nif this behaviour is unexpected.\nYou can also force load all of the ghosts in your MapsGhosts folder.");
+            //     UI::Separator();
+            // }
         }
 
+        if (CurrentActiveMatch !is null and QuickConvert) UI::Text("Active match: " + CurrentActiveMatch.ToString());
+        if (QuickConvert)
+        {
+            if (IsEmptyReplayInstalled) UI::Text("Quick convert is enabled." + (IsDemo() ? " Right-click matches to directly convert them to replays." : ""));
+            if (IsConvertingReplay) 
+            { 
+                UI::Text("Please finish the conversion of the current match.");
+                if (UI::ButtonColored("Cancel current conversion", 0))
+                {
+                    @CurrentActiveMatch = null;
+                    IsConvertingReplay = false;
+                    UI::ShowNotification(GhostFinderLogo + "GhostFinder", "Conversion cancelled.", vec4(0.6, 0, 0, 1));
+                }
+            }
+            if (!IsEmptyReplayInstalled) 
+            {
+                UI::Text("Quick convert is enabled, but EmptyReplay is not installed. Please download it.");
+                if (!IsDemo())
+                {
+                    UI::Text("To convert this ghost to a replay, you must download/create an EmptyReplay.Replay.Gbx file.");
+                    if (UI::Button("Check for EmptyReplay.Replay.Gbx in Replays/Replays/"))
+                    {
+                        Fids::UpdateTree(Fids::GetUserFolder("Replays"));
+                        IsEmptyReplayInstalled = Fids::GetUser("Replays/Replays/EmptyReplay.Replay.Gbx") !is null;
+                    }
+                    if (UI::Button("Download EmptyReplay") and !IsDownloadingEmptyReplay)
+                    {
+                        startnew(DownloadEmptyReplay);
+                    }
+                }
+            }
+            if (IsDemo())
+            {
+                UI::Text("Demo players are unable to convert ghosts to replays due to Nadeo limitations.");
+            }
+            UI::Separator();
+        }
+
+        
+        UI::BeginDisabled(IsDownloadingGhosts);
         if (UI::Button("Reload"))
         {
             Done = false;
@@ -128,7 +197,24 @@ void Render()
         if (UI::Button("Force load all ghosts"))
         {
             ForceLoadAllGhosts();
+            Done = false;
+            IsUIDExportFinished = false;
         }
+        if (UI::Button("Download all ghosts from cloud"))
+        {
+            startnew(DownloadAllGhosts);
+        }
+        UI::EndDisabled();
+        if (IsDownloadingGhosts)
+        {
+            UI::Text("Please wait for ghosts download to finish.");
+            UI::ProgressBar(TotalDownloaded / 200.0, vec2(-1, 0), TotalDownloaded + " / 200");
+            if (UI::ButtonColored("Cancel download", 0))
+            {
+                IsDownloadingGhosts = false;
+            }
+        }
+
         UI::Separator();
 
         EnableFilter = UI::Checkbox("Find ghost by map number", filter);
@@ -177,6 +263,7 @@ void Main()
     while (true)
     {
         LoadMapsAndGhosts();
+        ConvertReplay();
         yield();
     }
 }
@@ -220,7 +307,7 @@ void LoadMapsAndGhosts()
 
         Final.InsertLast(Map.EdChallengeId);
         MapStr = NextMap(MapStr);
-        yield();
+        if (i % MatchPerFrame == 0) yield();
     }
     auto UserFolder = Fids::GetUserFolder("");
     while (ProfileFolder is null)
@@ -234,14 +321,14 @@ void LoadMapsAndGhosts()
                 break;
             }
         }
-        if (ProfileFolder is null and ProfileFolderNotFoundFailsafe < 10) 
+        if (ProfileFolder is null and ProfileFolderNotFoundFailsafe < 3) 
         {
             warn("ProfileFolder not found, retrying.");
             ProfileFolderNotFoundFailsafe++;
         }
-        else if (ProfileFolder is null and ProfileFolderNotFoundFailsafe == 10)
+        else if (ProfileFolder is null and ProfileFolderNotFoundFailsafe == 3)
         {
-            warn("ProfileFolder not found for 10 consecutive frames, last warning.");
+            warn("ProfileFolder not found for 3 consecutive frames, last warning.");
             ProfileFolderNotFoundFailsafe++;
         }
         yield();
@@ -257,23 +344,25 @@ void LoadMapsAndGhosts()
                 break;
             }
         }
-        if (MapsGhostsFolder is null and MapsGhostsFolderNotFoundFailsafe < 10) 
+        if (MapsGhostsFolder is null and MapsGhostsFolderNotFoundFailsafe < 3) 
         {
             warn("MapsGhosts Folder not found, retrying.");
             MapsGhostsFolderNotFoundFailsafe++;
         }
-        else if (MapsGhostsFolder is null and MapsGhostsFolderNotFoundFailsafe == 10)
+        else if (MapsGhostsFolder is null and MapsGhostsFolderNotFoundFailsafe == 3)
         {
-            warn("MapsGhosts Folder not found for 10 consecutive frames, last warning.");
+            warn("MapsGhosts Folder not found for 3 consecutive frames, last warning.");
             MapsGhostsFolderNotFoundFailsafe++;
         }
         yield();
     }
+    ForceLoadAllGhosts();
     for (uint i = 0; i < MapsGhostsFolder.Leaves.Length; ++i)
     {
         auto File = cast<CSystemFidFile>(MapsGhostsFolder.Leaves[i]);
+        if (File.FileName == "FileList.Gbx") continue;
         auto Nod = Fids::Preload(File);
-        if (Nod is null) { error(File.FileName + " is not Nod."); continue; }
+        if (Nod is null) { warn(File.FileName + " is not Nod."); continue; }
         auto Ghost = cast<CGameCtnGhost>(Nod);
         if (Ghost is null) { warn(File.FileName + " is not Ghost."); continue; }
         string MapUIDFromGhost = GetMapUIDFromGhost(Ghost);
@@ -292,7 +381,7 @@ void LoadMapsAndGhosts()
             @match.Ghost = Ghost;
             Matches.InsertLast(match);
         }
-        yield();
+        if (i % MatchPerFrame == 0) yield(); // double the match loading speed :business:
     }
     Done = true;
     IsUIDExportFinished = true;
